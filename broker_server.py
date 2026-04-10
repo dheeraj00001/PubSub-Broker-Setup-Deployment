@@ -586,7 +586,46 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
 
+    /* ── chart panels ── */
+    .chart-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+    @media (max-width: 900px) { .chart-grid { grid-template-columns: 1fr; } }
+
+    .chart-wrap {
+      position: relative;
+      height: 220px;
+      padding: 16px 18px 10px;
+    }
+
+    .chart-wrap canvas {
+      max-height: 100%;
+    }
+
+    .chart-title-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 4px;
+      padding: 14px 20px 0;
+    }
+
+    .chart-title-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
   </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -664,6 +703,52 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="stat-value" id="s-throughput">0</div>
       <div class="stat-sub">messages / second</div>
     </div>
+  </div>
+
+  <!-- ── Live Charts ─────────────────────────────────────────────────────── -->
+  <div class="section-label">Live Charts</div>
+  <div class="chart-grid">
+
+    <!-- Throughput over time -->
+    <div class="panel">
+      <div class="chart-title-row">
+        <span class="chart-title-dot" style="background:var(--cyan);box-shadow:0 0 6px var(--cyan)"></span>
+        Throughput over Time
+        <span style="margin-left:auto;color:var(--muted);font-size:9px">msg / s</span>
+      </div>
+      <div class="chart-wrap"><canvas id="chart-throughput"></canvas></div>
+    </div>
+
+    <!-- Client count over time -->
+    <div class="panel">
+      <div class="chart-title-row">
+        <span class="chart-title-dot" style="background:var(--green);box-shadow:0 0 6px var(--green)"></span>
+        Connected Clients over Time
+        <span style="margin-left:auto;color:var(--muted);font-size:9px">clients</span>
+      </div>
+      <div class="chart-wrap"><canvas id="chart-clients"></canvas></div>
+    </div>
+
+    <!-- Throughput vs Clients scatter -->
+    <div class="panel">
+      <div class="chart-title-row">
+        <span class="chart-title-dot" style="background:var(--amber);box-shadow:0 0 6px var(--amber)"></span>
+        Throughput vs Client Count
+        <span style="margin-left:auto;color:var(--muted);font-size:9px">x = clients · y = msg/s</span>
+      </div>
+      <div class="chart-wrap"><canvas id="chart-scatter"></canvas></div>
+    </div>
+
+    <!-- Messages per topic -->
+    <div class="panel">
+      <div class="chart-title-row">
+        <span class="chart-title-dot" style="background:var(--red);box-shadow:0 0 6px var(--red)"></span>
+        Messages per Topic
+        <span style="margin-left:auto;color:var(--muted);font-size:9px">total count</span>
+      </div>
+      <div class="chart-wrap"><canvas id="chart-topics"></canvas></div>
+    </div>
+
   </div>
 
   <!-- Connected Clients table -->
@@ -814,6 +899,229 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>`;
   }
 
+  // ── Chart theme helpers ────────────────────────────────────────────────────
+  const CSS = getComputedStyle(document.documentElement);
+  const C = {
+    cyan:    CSS.getPropertyValue('--cyan').trim()   || '#00e5ff',
+    green:   CSS.getPropertyValue('--green').trim()  || '#00ffa3',
+    amber:   CSS.getPropertyValue('--amber').trim()  || '#ffb347',
+    red:     CSS.getPropertyValue('--red').trim()    || '#ff4d6d',
+    border:  CSS.getPropertyValue('--border').trim() || '#1e2d45',
+    muted:   CSS.getPropertyValue('--muted').trim()  || '#5a6e8a',
+    text:    CSS.getPropertyValue('--text').trim()   || '#c9d8f0',
+    card:    CSS.getPropertyValue('--card').trim()   || '#111827',
+    bg:      CSS.getPropertyValue('--bg').trim()     || '#080c14',
+  };
+
+  const CHART_DEFAULTS = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 400 },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#0d1424',
+        borderColor: C.border,
+        borderWidth: 1,
+        titleColor: C.text,
+        bodyColor: C.muted,
+        titleFont: { family: "'Space Mono', monospace", size: 11 },
+        bodyFont:  { family: "'Space Mono', monospace", size: 11 },
+        padding: 10,
+      },
+    },
+    scales: {
+      x: {
+        grid:  { color: C.border + '88', drawBorder: false },
+        ticks: { color: C.muted, font: { family: "'Space Mono', monospace", size: 9 }, maxTicksLimit: 8 },
+        border: { color: C.border },
+      },
+      y: {
+        grid:  { color: C.border + '88', drawBorder: false },
+        ticks: { color: C.muted, font: { family: "'Space Mono', monospace", size: 9 }, maxTicksLimit: 5 },
+        border: { color: C.border },
+        beginAtZero: true,
+      },
+    },
+  };
+
+  function glowLine(color) {
+    return {
+      borderColor: color,
+      backgroundColor: color + '18',
+      pointBackgroundColor: color,
+      pointBorderColor: color + '88',
+      pointRadius: 3,
+      pointHoverRadius: 5,
+      borderWidth: 2,
+      fill: true,
+      tension: 0.45,
+    };
+  }
+
+  // ── History buffers (max 40 points) ───────────────────────────────────────
+  const MAX_PTS = 40;
+  let histTime       = [];
+  let histThroughput = [];
+  let histClients    = [];
+  let scatterData    = [];   // { x: clientCount, y: throughput }
+
+  // ── Build charts ──────────────────────────────────────────────────────────
+  const ctxThroughput = document.getElementById('chart-throughput').getContext('2d');
+  const chartThroughput = new Chart(ctxThroughput, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label: 'Throughput (msg/s)',
+        data: [],
+        ...glowLine(C.cyan),
+      }],
+    },
+    options: {
+      ...CHART_DEFAULTS,
+      scales: {
+        ...CHART_DEFAULTS.scales,
+        y: { ...CHART_DEFAULTS.scales.y, title: { display: false } },
+      },
+    },
+  });
+
+  const ctxClients = document.getElementById('chart-clients').getContext('2d');
+  const chartClients = new Chart(ctxClients, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label: 'Clients',
+        data: [],
+        ...glowLine(C.green),
+      }],
+    },
+    options: { ...CHART_DEFAULTS },
+  });
+
+  const ctxScatter = document.getElementById('chart-scatter').getContext('2d');
+  const chartScatter = new Chart(ctxScatter, {
+    type: 'scatter',
+    data: {
+      datasets: [{
+        label: 'Throughput vs Clients',
+        data: [],
+        backgroundColor: C.amber + 'aa',
+        borderColor: C.amber,
+        pointRadius: 5,
+        pointHoverRadius: 7,
+        borderWidth: 1.5,
+      }],
+    },
+    options: {
+      ...CHART_DEFAULTS,
+      scales: {
+        x: {
+          ...CHART_DEFAULTS.scales.x,
+          title: {
+            display: true,
+            text: 'Clients',
+            color: C.muted,
+            font: { family: "'Space Mono', monospace", size: 9 },
+          },
+          ticks: { ...CHART_DEFAULTS.scales.x.ticks, stepSize: 1 },
+        },
+        y: {
+          ...CHART_DEFAULTS.scales.y,
+          title: {
+            display: true,
+            text: 'msg / s',
+            color: C.muted,
+            font: { family: "'Space Mono', monospace", size: 9 },
+          },
+        },
+      },
+    },
+  });
+
+  const ctxTopics = document.getElementById('chart-topics').getContext('2d');
+  const chartTopics = new Chart(ctxTopics, {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [{
+        label: 'Messages',
+        data: [],
+        backgroundColor: (ctx) => {
+          const colors = [C.red, C.amber, C.cyan, C.green];
+          return colors[ctx.dataIndex % colors.length] + 'cc';
+        },
+        borderColor: (ctx) => {
+          const colors = [C.red, C.amber, C.cyan, C.green];
+          return colors[ctx.dataIndex % colors.length];
+        },
+        borderWidth: 1.5,
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      ...CHART_DEFAULTS,
+      indexAxis: 'y',
+      scales: {
+        x: {
+          ...CHART_DEFAULTS.scales.x,
+          beginAtZero: true,
+        },
+        y: {
+          ...CHART_DEFAULTS.scales.y,
+          grid: { display: false },
+          ticks: {
+            color: C.muted,
+            font: { family: "'Space Mono', monospace", size: 9 },
+            maxTicksLimit: 10,
+          },
+        },
+      },
+    },
+  });
+
+  // ── Update charts ──────────────────────────────────────────────────────────
+  function updateCharts(data) {
+    const ts = new Date().toLocaleTimeString('en-GB');
+    const tput = data.throughput;
+    const nclients = data.clients.length;
+
+    // Rolling time-series
+    histTime.push(ts);
+    histThroughput.push(tput);
+    histClients.push(nclients);
+    scatterData.push({ x: nclients, y: tput });
+
+    if (histTime.length > MAX_PTS) {
+      histTime.shift(); histThroughput.shift();
+      histClients.shift(); scatterData.shift();
+    }
+
+    // Throughput line
+    chartThroughput.data.labels = [...histTime];
+    chartThroughput.data.datasets[0].data = [...histThroughput];
+    chartThroughput.update('none');
+
+    // Clients line
+    chartClients.data.labels = [...histTime];
+    chartClients.data.datasets[0].data = [...histClients];
+    chartClients.update('none');
+
+    // Scatter
+    chartScatter.data.datasets[0].data = [...scatterData];
+    chartScatter.update('none');
+
+    // Topics bar — show top 10 by message count
+    const sorted = [...data.topics]
+      .sort((a, b) => b.messages - a.messages)
+      .slice(0, 10);
+    chartTopics.data.labels = sorted.map(t => t.name);
+    chartTopics.data.datasets[0].data = sorted.map(t => t.messages);
+    chartTopics.update('none');
+  }
+
   // ── Main fetch loop ────────────────────────────────────────────────────────
   async function fetchStats() {
     try {
@@ -876,6 +1184,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         renderBar('Publishers',  pubs, total, 'var(--amber)') +
         renderBar('Subscribers', subs, total, 'var(--green)') +
         (unk ? renderBar('Unknown', unk, total, 'var(--dim)') : '');
+
+      // ─ Update charts ─
+      updateCharts(data);
 
     } catch (e) {
       console.warn('Stats fetch failed:', e);
